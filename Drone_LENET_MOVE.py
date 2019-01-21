@@ -39,6 +39,29 @@ from pydrone import libardrone
 import cv2
 import numpy as np
 from math import sqrt
+import time
+from filelock import FILELOCK
+
+def write_to_filelock(file, written_value, read_or_write):
+    canRead = 0
+    with FileLock(file):
+        if read_or_write == 'r':
+            file = open('canRead.txt', 'r+')
+            canRead = file.readline()
+            file.close()
+        else:
+            try:
+                file = open(file, 'w+')
+                file.write(written_value)
+                file.close()
+                canRead = 1
+            except Exception as e:
+                print(e)
+                canRead = 0
+        # work with the file as it is now locked
+        print("Lock acquired.")
+    return canRead
+
 
 def is_square(apositiveint):
   x = apositiveint // 2
@@ -77,6 +100,9 @@ def crop(im, k):
 
 def main():
     pygame.init()
+
+    cam = cv2.VideoCapture('tcp://192.168.1.1:5555')
+    running2 = True
     W2, H2 = 320,240
     W, H = 640, 290
     screen = pygame.display.set_mode((W, H))
@@ -109,100 +135,93 @@ def main():
             image_grid_array = []
             size_of_grid = 9
             grid_length = 3
-            test_var = drone.image
-            surface = pygame.image.fromstring(drone.image, (W2, H2), 'RGB')
-            image2 = pygame.surfarray.array3d(surface)
-            image_grid_array.extend(crop(image2, size_of_grid))
 
-            orig = image.copy()
+            try:
+                frame = None
 
-            Ps = 0
-            Pl = .5
-            Pr = .2
+                while running2:
+                    # get current frame of video
+                    running2, frame = cam.read()
+                    if running2:
+                        cv2.imshow('frame', frame)
+                        image_grid_array.extend(crop(frame, size_of_grid))
 
-            i = 1
+                        Ps = 0
+                        Pl = .5
+                        Pr = .2
 
-            file = open('DroneRead.txt', 'w+')
-            file.write("1")
-            droneRead = 0
-            file.close()
+                        i = 1
 
-            for image in image_grid_array:
+                        canRead = write_to_filelock('droneRead.txt', "1", 'w')
 
-                cv2.imwrite("test_img.jpeg", image)
+                        for image in image_grid_array:
 
-                canRead = '0'
-                # Test for I/O file close permissions
-                while canRead == "0":
-                    file = open('canRead.txt', 'w+')
-                    file.write("1")
-                    file.close()
-                    file = open('canRead.txt', 'r+')
-                    canRead = str(file.readline())
-                    print
-                    "Can Read Succeeded to make 1"
+                            cv2.imwrite("test_img.jpeg", image)
 
-                    file.close()
+                            canRead = 0
+                            # Test for I/O file close permissions
+                            while canRead == 0:
 
-                    # To run this in python 3.5 we will need to run a script that uses the "env"
-                    # wrapper
-                    # Once the pipeline is established, have the thread continuousely generate new samples
-                    #
-                    # can definitely recursion this size_of grid /2 + 1
-
-                while (droneRead != '1'):
-                    file = open('DroneRead.txt', 'r')
-                    droneRead = str(file.readline())
-                    file.close()
-
-                while (droneRead == '1'):
-
-                    try:
-
-                        file = open('out.txt', 'r')
-                        collision = float(file.readline().split(":")[1])
-                        print("COLLISION: " + str(collision))
-                        file.close()
-                    except:
-                        collision = 0
-                        print("COLLISION: -1")
-
-                    file = open('DroneRead.txt', 'w+')
-                    file.write("0")
-                    droneRead = str(file.readline())
-
-                    file.close()
-
-                    print("Drone Read inactive")
+                                canRead = write_to_filelock('canRead.txt', "1", 'w')
 
 
+                                # To run this in python 3.5 we will need to run a script that uses the "env"
+                                # wrapper
+                                # Once the pipeline is established, have the thread continuousely generate new samples
+                                #
+                                # can definitely recursion this size_of grid /2 + 1
+                            canRead = 0
 
-                if i % grid_length < (size_of_grid / 2 + 1):
-                    Pl += collision
-                elif i % grid_length == (size_of_grid / 2 + 1):
-                    Ps += collision
-                else:
-                    Pr += collision
+                            while (canRead == 0):
+                                canRead = write_to_filelock('DroneRead.txt', "0", 'r')
+                            canRead = 0
 
-            event = 1
+                            while (canRead == 0):
+                                try:
 
-            # forward / backward
-            if Pr and Pl > Ps:
+                                    canRead = write_to_filelock('out.txt', "0", 'r')
+                                    collision = float(canRead)
+                                except:
+                                    collision = 0
+                                    print("COLLISION: -1")
+                            canRead = 0
+                            while (canRead == 0):
+                                canRead = write_to_filelock('DroneRead.txt', "0", 'w')
 
-                drone.move_forward()
-            else:
-                if Pr <= Pl:
+                            print("Drone Read active")
 
-                    drone.move_left()
-                else:
-                    drone.move_right()
-            # turn left / turn right
+                            if i % grid_length < (size_of_grid / 2 + 1):
+                                Pl += collision
+                            elif i % grid_length == (size_of_grid / 2 + 1):
+                                Ps += collision
+                            else:
+                                Pr += collision
+
+                        event = 1
+
+                        # forward / backward
+                        if Pr and Pl > Ps:
+
+                            drone.move_forward()
+                        else:
+                            if Pr <= Pl:
+
+                                drone.move_left()
+                            else:
+                                drone.move_right()
+                                # turn left / turn right
+                    else:
+                        # error reading frame
+                        print 'error reading video feed'
+            except Exception as e:
+                print(e)
+
+
 
             hud_color = (255, 0, 0) if drone.navdata.get('drone_state', dict()).get('emergency_mask', 1) else (10, 10, 255)
             bat = drone.navdata.get(0, dict()).get('battery', 0)
             f = pygame.font.Font(None, 20)
             hud = f.render('Battery: %i%%' % bat, True, hud_color)
-            screen.blit(surface, (0, 0))
             screen.blit(hud, (10, 10))
         except Exception as e:
             print(str(e))
